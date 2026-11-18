@@ -10,8 +10,8 @@ const londrina = Londrina_Solid({
 });
 
 export const metadata: Metadata = {
-  title: "My Website",
-  description: "My Next.js Website",
+  title: "🌸 Focuz",
+  description: "Focuz is a simple, distraction-free productivity timer designed to help you manage your time and stay focused. Choose between Focus, Short Break, and Long Break sessions, customize your background, and create a peaceful space for getting things done.",
 };
 
 export default function RootLayout({
