@@ -1,18 +1,15 @@
-
 'use client';
 
-import { useState, useEffect } from 'react';
-
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Play,
   Pause,
   RotateCcw,
-  Image as ImageIcon,
+  Settings,
   Maximize,
-  Bell,
-  CheckCircle2,
+  Image as ImageIcon,
   X,
-  Sparkles,
+  Check,
 } from 'lucide-react';
 
 const modes = {
@@ -20,6 +17,17 @@ const modes = {
   'Short Break': 5 * 60,
   'Long Break': 10 * 60,
 };
+
+type Mode = keyof typeof modes;
+
+type SavedTimer = {
+  mode: Mode;
+  timeLeft: number;
+  running: boolean;
+  endTime: number | null;
+};
+
+const STORAGE_KEY = 'focuz-timer-v3';
 
 const backgrounds = [
   '/bg1.jfif',
@@ -30,125 +38,214 @@ const backgrounds = [
   '/bg6.jfif',
 ];
 
-const confettiColors = [
-  '#f87171',
-  '#fbbf24',
-  '#34d399',
-  '#60a5fa',
-  '#c084fc',
-  '#fb7185',
-  '#ffffff',
-];
-
-const confettiPieces = Array.from({ length: 55 }, (_, i) => ({
-  id: i,
-  left: `${(i * 37) % 100}%`,
-  delay: `${(i % 12) * 0.12}s`,
-  color: confettiColors[i % confettiColors.length],
-}));
-
-type Mode = keyof typeof modes;
-
-export default function Page() {
-  const [bgIndex, setBgIndex] = useState(0);
+export default function Home() {
   const [mode, setMode] = useState<Mode>('Focus');
   const [timeLeft, setTimeLeft] = useState(modes.Focus);
   const [running, setRunning] = useState(false);
-
+  const [backgroundIndex, setBackgroundIndex] = useState(0);
   const [showCelebration, setShowCelebration] = useState(false);
-  const [notificationsEnabled, setNotificationsEnabled] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [hydrated, setHydrated] = useState(false);
 
-  // Check notification permission
+  const endTimeRef = useRef<number | null>(null);
+  const completedRef = useRef(false);
+
+
   useEffect(() => {
-    if ('Notification' in window) {
-      setNotificationsEnabled(
-        Notification.permission === 'granted'
-      );
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+
+      if (saved) {
+        const data: SavedTimer = JSON.parse(saved);
+
+        if (data.mode in modes) {
+          setMode(data.mode);
+
+          if (data.running && data.endTime) {
+            const remaining = Math.max(
+              0,
+              Math.ceil((data.endTime - Date.now()) / 1000)
+            );
+
+            if (remaining > 0) {
+              endTimeRef.current = data.endTime;
+              setTimeLeft(remaining);
+              setRunning(true);
+            } else {
+              endTimeRef.current = null;
+              setTimeLeft(0);
+              setRunning(false);
+              completedRef.current = true;
+              setShowCelebration(true);
+            }
+          } else {
+            setTimeLeft(
+              Math.max(0, Math.min(data.timeLeft, modes[data.mode]))
+            );
+            setRunning(false);
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Timer restore error:', error);
+      localStorage.removeItem(STORAGE_KEY);
     }
+
+    setHydrated(true);
   }, []);
 
-  // Enable browser notifications
-  const enableNotifications = async () => {
-    if (!('Notification' in window)) {
-      alert('Your browser does not support notifications.');
-      return;
-    }
 
-    const permission = await Notification.requestPermission();
-
-    setNotificationsEnabled(permission === 'granted');
-
-    if (permission === 'granted') {
-      new Notification('🪷 Focuz notifications enabled!', {
-        body: 'You will be notified when your sessions are completed.',
-      });
-    } else if (permission === 'denied') {
-      alert(
-        'Notifications are blocked. You can enable them in your browser settings.'
-      );
-    }
-  };
-
-  // Timer logic
   useEffect(() => {
-    if (!running) return;
+    if (!hydrated) return;
 
-    const timer = setInterval(() => {
-      setTimeLeft((prev) => Math.max(prev - 1, 0));
-    }, 1000);
+    const data: SavedTimer = {
+      mode,
+      timeLeft,
+      running,
+      endTime: endTimeRef.current,
+    };
 
-    return () => clearInterval(timer);
-  }, [running]);
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    } catch (error) {
+      console.error('Timer save error:', error);
+    }
+  }, [mode, timeLeft, running, hydrated]);
 
-  // Session completed
-  useEffect(() => {
-    if (timeLeft === 0) {
-      setRunning(false);
-      setShowCelebration(true);
+  const completeSession = useCallback(() => {
+    if (completedRef.current) return;
 
+    completedRef.current = true;
+    endTimeRef.current = null;
+
+    setTimeLeft(0);
+    setRunning(false);
+    setShowCelebration(true);
+
+    try {
       if (
         'Notification' in window &&
         Notification.permission === 'granted'
       ) {
-        new Notification('🎉 Session completed! | Focuz', {
+        new Notification('FOCUZ.', {
           body:
             mode === 'Focus'
-              ? 'Great work! You completed your focus session. Time for a break!'
-              : 'Break completed! Ready for another session?',
+              ? 'Focus session completed. Time for a break!'
+              : 'Break completed. Ready for your next session?',
         });
       }
+    } catch (error) {
+      console.error('Notification error:', error);
     }
-  }, [timeLeft, mode]);
+  }, [mode]);
 
-  // Change mode
+  useEffect(() => {
+    if (!running || !hydrated) return;
+
+    const updateTimer = () => {
+      const endTime = endTimeRef.current;
+
+      if (!endTime) return;
+
+      const remaining = Math.ceil(
+        (endTime - Date.now()) / 1000
+      );
+
+      if (remaining <= 0) {
+        completeSession();
+      } else {
+        setTimeLeft(remaining);
+      }
+    };
+
+    updateTimer();
+
+    const interval = window.setInterval(updateTimer, 250);
+
+    const handleVisibility = () => {
+      if (!document.hidden) updateTimer();
+    };
+
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [running, hydrated, completeSession]);
+
+
+  const toggleTimer = () => {
+    if (running) {
+      const remaining = endTimeRef.current
+        ? Math.max(
+            0,
+            Math.ceil((endTimeRef.current - Date.now()) / 1000)
+          )
+        : timeLeft;
+
+      endTimeRef.current = null;
+      setTimeLeft(remaining);
+      setRunning(false);
+
+      if (remaining <= 0) completeSession();
+
+      return;
+    }
+
+    const duration = timeLeft <= 0 ? modes[mode] : timeLeft;
+
+    completedRef.current = false;
+    setShowCelebration(false);
+    setTimeLeft(duration);
+    endTimeRef.current = Date.now() + duration * 1000;
+    setRunning(true);
+  };
+
+  
+  const resetTimer = () => {
+    endTimeRef.current = null;
+    completedRef.current = false;
+
+    setRunning(false);
+    setTimeLeft(modes[mode]);
+    setShowCelebration(false);
+  };
+
   const changeMode = (newMode: Mode) => {
+    endTimeRef.current = null;
+    completedRef.current = false;
+
     setRunning(false);
     setShowCelebration(false);
     setMode(newMode);
     setTimeLeft(modes[newMode]);
   };
 
-  // Reset timer
-  const resetTimer = () => {
-    setRunning(false);
-    setShowCelebration(false);
-    setTimeLeft(modes[mode]);
-  };
-
-  // Change background
   const changeBackground = () => {
-    setBgIndex((prev) => (prev + 1) % backgrounds.length);
+    setBackgroundIndex(
+      (previous) => (previous + 1) % backgrounds.length
+    );
   };
 
-  // Format timer
-  const minutes = Math.floor(timeLeft / 60);
-  const seconds = timeLeft % 60;
+  const enableNotifications = async () => {
+    try {
+      if (!('Notification' in window)) {
+        alert('Your browser does not support notifications.');
+        return;
+      }
 
-  const formattedTime =
-    `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+      const permission = await Notification.requestPermission();
 
-  // Fullscreen
-  const toggleFullscreen = async () => {
+      if (permission !== 'granted') {
+        alert('Notifications were not enabled.');
+      }
+    } catch (error) {
+      console.error('Notification permission error:', error);
+    }
+  };
+
+  const enterFullscreen = async () => {
     try {
       if (!document.fullscreenElement) {
         await document.documentElement.requestFullscreen();
@@ -156,301 +253,188 @@ export default function Page() {
         await document.exitFullscreen();
       }
     } catch (error) {
-      console.error('Fullscreen unavailable:', error);
+      console.error('Fullscreen error:', error);
     }
   };
 
-  return (
-    <main className="relative min-h-[100svh] w-full overflow-x-hidden overflow-y-auto flex flex-col items-center px-4 text-white">
+  const formatTime = (seconds: number) => {
+    const minutes = Math.floor(seconds / 60);
+    const remainingSeconds = seconds % 60;
 
-      {/* Background */}
+    return `${String(minutes).padStart(2, '0')}:${String(
+      remainingSeconds
+    ).padStart(2, '0')}`;
+  };
+
+  if (!hydrated) {
+    return <main className="min-h-svh bg-black" />;
+  }
+
+  return (
+    <main className="relative isolate flex min-h-svh flex-col overflow-hidden bg-black text-white">
+
+
       <div
-        className="fixed inset-0 bg-cover bg-center blur-xs scale-105 transition-all duration-700"
+        className="pointer-events-none fixed inset-0 z-0 bg-cover bg-center transition-all duration-700"
         style={{
-          backgroundImage: `url('${backgrounds[bgIndex]}')`,
+          backgroundImage: `url("${backgrounds[backgroundIndex]}")`,
         }}
       />
 
-      {/* Dark overlay */}
-      <div className="fixed inset-0 bg-black/35" />
 
-      {/* Header */}
-      <header className="relative z-10 w-full shrink-0 text-center pt-8 sm:pt-10 px-2">
-        <h1 className="text-5xl sm:text-6xl font-bold tracking-wider">
+      <div className="pointer-events-none fixed inset-0 z-1 bg-black/55 backdrop-blur-[2px]" />
+
+      <header className="relative z-10 flex flex-col items-center px-4 pt-8 text-center sm:pt-10">
+        <h1 className="title text-5xl tracking-wide sm:text-6xl">
           FOCUZ.
         </h1>
 
         <p
-          className="max-w-xl mx-auto text-[10px] sm:text-sm text-white/70 tracking-[0.14em] sm:tracking-[0.2em] leading-relaxed mt-3 px-2"
+          className="mt-2 text-xs tracking-[0.2em] text-white/75 sm:text-sm"
           style={{ fontFamily: 'Arial, sans-serif' }}
         >
-          DISTRACTIONS CAN WAIT, BUT YOUR GOALS CAN'T.
+          DISTRACTIONS CAN WAIT, BUT YOUR GOALS CAN'T;
+          {/* &apos;. */}
         </p>
       </header>
 
-      {/* Timer container */}
-      <div className="relative z-10 w-full max-w-lg flex flex-col items-center gap-6 sm:gap-8 p-5 sm:p-9 my-7 sm:my-auto rounded-3xl bg-black/20 backdrop-blur-xl border border-white/15 shadow-2xl">
+      <section className="relative z-10 my-8 flex w-full flex-1 items-center justify-center px-4 sm:my-auto">
+        <div className="w-full max-w-xl rounded-3xl border border-white/15 bg-black/30 p-6 text-center shadow-2xl backdrop-blur-xl sm:p-10">
 
-        {/* Mode selection */}
-        <div className="flex flex-wrap justify-center gap-2">
-          {(Object.keys(modes) as Mode[]).map((item) => (
-            <button
-              key={item}
-              onClick={() => changeMode(item)}
-              className={`px-3 sm:px-4 py-2 rounded-xl text-sm sm:text-lg transition-all duration-300 ${
-                mode === item
-                  ? 'bg-white text-black shadow-lg'
-                  : 'bg-white/10 text-white/80 hover:bg-white/20'
-              }`}
-            >
-              {item}
-            </button>
-          ))}
-        </div>
 
-        {/* Timer */}
-        <div className="text-center w-full">
-          <p className="text-7xl sm:text-9xl font-bold tracking-wider tabular-nums">
-            {formattedTime}
-          </p>
-
-          <p
-            className="text-white/60 text-sm sm:text-base mt-3"
-            style={{ fontFamily: 'Arial, sans-serif' }}
-          >
-            {running
-              ? 'Stay focused.'
-              : timeLeft === 0
-                ? 'Session completed!'
-                : mode === 'Focus'
-                  ? 'Ready to focus?'
-                  : 'Take a break.'}
-          </p>
-        </div>
-
-        {/* Session status */}
-        <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-white/10 border border-white/10">
-          <span
-            className={`w-2 h-2 rounded-full ${
-              timeLeft === 0
-                ? 'bg-emerald-400'
-                : running
-                  ? 'bg-emerald-400 animate-pulse'
-                  : 'bg-white/40'
-            }`}
-          />
-
-          <span
-            className="text-[10px] tracking-[0.2em] text-white/70"
-            style={{ fontFamily: 'Arial, sans-serif' }}
-          >
-            {timeLeft === 0
-              ? 'SESSION COMPLETED'
-              : running
-                ? 'SESSION IN PROGRESS'
-                : 'SESSION PAUSED'}
-          </span>
-        </div>
-
-        {/* Controls */}
-        <div className="flex items-center justify-center gap-4">
-          <button
-            onClick={() => setRunning(!running)}
-            disabled={timeLeft === 0}
-            aria-label={running ? 'Pause timer' : 'Start timer'}
-            title={running ? 'Pause' : 'Start'}
-            className="w-16 h-16 flex items-center justify-center rounded-2xl bg-white text-black hover:scale-105 active:scale-95 transition-all disabled:opacity-40"
-          >
-            {running
-              ? <Pause size={26} fill="currentColor" />
-              : <Play size={26} fill="currentColor" />
-            }
-          </button>
-
-          <button
-            onClick={resetTimer}
-            aria-label="Reset timer"
-            title="Reset timer"
-            className="w-14 h-14 flex items-center justify-center rounded-2xl bg-white/10 border border-white/20 hover:bg-white/25 hover:scale-105 active:scale-95 transition-all"
-          >
-            <RotateCcw size={22} />
-          </button>
-        </div>
-
-        {/* Utility buttons */}
-        <div className="flex items-center gap-3">
-          <button
-            onClick={changeBackground}
-            aria-label="Change background"
-            title="Change background"
-            className="p-3 rounded-full bg-white/10 border border-white/15 hover:bg-white/25 transition-all"
-          >
-            <ImageIcon size={20} />
-          </button>
-
-          <button
-            onClick={enableNotifications}
-            aria-label="Enable notifications"
-            title={
-              notificationsEnabled
-                ? 'Notifications enabled'
-                : 'Enable notifications'
-            }
-            className={`p-3 rounded-full border transition-all ${
-              notificationsEnabled
-                ? 'bg-emerald-400/20 border-emerald-300/30 text-emerald-200'
-                : 'bg-white/10 border-white/15 hover:bg-white/25'
-            }`}
-          >
-            <Bell size={20} />
-          </button>
-
-          <button
-            onClick={toggleFullscreen}
-            aria-label="Toggle fullscreen"
-            title="Fullscreen"
-            className="p-3 rounded-full bg-white/10 border border-white/15 hover:bg-white/25 transition-all"
-          >
-            <Maximize size={20} />
-          </button>
-        </div>
-
-        <p
-          className="text-[10px] text-white/45 text-center"
-          style={{ fontFamily: 'Arial, sans-serif' }}
-        >
-          {notificationsEnabled
-            ? 'NOTIFICATIONS ENABLED'
-            : 'ENABLE NOTIFICATIONS FOR SESSION ALERTS'}
-        </p>
-      </div>
-
-      {/* Completion celebration */}
-      {showCelebration && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-hidden bg-black/50 backdrop-blur-sm p-4">
-
-          {/* Confetti */}
-          <div className="absolute inset-0 pointer-events-none overflow-hidden">
-            {confettiPieces.map((piece) => (
-              <span
-                key={piece.id}
-                className="confetti-piece"
-                style={{
-                  left: piece.left,
-                  backgroundColor: piece.color,
-                  animationDelay: piece.delay,
-                }}
-              />
+          <div className="mb-9 flex flex-wrap justify-center gap-2 sm:gap-3">
+            {(Object.keys(modes) as Mode[]).map((item) => (
+              <button
+                key={item}
+                onClick={() => changeMode(item)}
+                className={`rounded-full px-4 py-2 text-xs transition sm:px-5 sm:text-sm ${
+                  mode === item
+                    ? 'bg-white text-black'
+                    : 'border border-white/20 bg-white/5 text-white/75 hover:bg-white/15'
+                }`}
+                style={{ fontFamily: 'Arial, sans-serif' }}
+              >
+                {item}
+              </button>
             ))}
           </div>
 
-          {/* Celebration card */}
-          <div className="relative z-10 w-full max-w-sm p-6 sm:p-8 rounded-3xl bg-white/15 border border-white/25 backdrop-blur-2xl shadow-2xl text-center animate-pop">
 
+          <div className="title select-none text-7xl tracking-wider sm:text-9xl">
+            {formatTime(timeLeft)}
+          </div>
+
+          <p
+            className="mt-3 text-xs tracking-[0.25em] text-white/55"
+            style={{ fontFamily: 'Arial, sans-serif' }}
+          >
+            {running ? 'STAY FOCUSED' : 'READY WHEN YOU ARE'}
+          </p>
+
+
+          <div className="mt-10 flex items-center justify-center gap-4">
             <button
-              onClick={() => setShowCelebration(false)}
-              aria-label="Close celebration"
-              className="absolute top-4 right-4 p-2 rounded-full bg-white/10 hover:bg-white/20 transition"
+              onClick={toggleTimer}
+              aria-label={running ? 'Pause timer' : 'Start timer'}
+              className="flex h-16 w-16 items-center justify-center rounded-full bg-white text-black transition hover:scale-105 active:scale-95"
             >
-              <X size={18} />
+              {running ? (
+                <Pause size={25} fill="currentColor" />
+              ) : (
+                <Play size={25} fill="currentColor" />
+              )}
             </button>
 
-            <div className="flex justify-center mb-5">
-              <div className="w-20 h-20 rounded-full bg-emerald-400/20 border border-emerald-300/30 flex items-center justify-center">
-                <CheckCircle2 size={48} className="text-emerald-300" />
-              </div>
-            </div>
-
-            <div className="flex items-center justify-center gap-2 mb-3">
-              <Sparkles size={18} className="text-yellow-300" />
-
-              <span className="text-xs tracking-[0.25em] text-white/70">
-                YOU DID IT!
-              </span>
-
-              <Sparkles size={18} className="text-yellow-300" />
-            </div>
-
-            <h2 className="text-3xl sm:text-4xl font-bold mb-3">
-              {mode === 'Focus' ? 'Amazing work!' : 'Well refreshed!'}
-            </h2>
-
-            <p
-              className="text-sm text-white/75 leading-relaxed mb-7"
-              style={{ fontFamily: 'Arial, sans-serif' }}
+            <button
+              onClick={resetTimer}
+              aria-label="Reset timer"
+              className="flex h-12 w-12 items-center justify-center rounded-full border border-white/25 bg-white/10 transition hover:bg-white/20"
             >
-              {mode === 'Focus'
-                ? 'You completed your focus session. Every little step counts. Keep it up!'
-                : 'Your break is complete. Take that fresh energy into your next session!'}
-            </p>
+              <RotateCcw size={19} />
+            </button>
+          </div>
+
+
+          <div className="mt-9 flex flex-wrap justify-center gap-6">
+            <button
+              onClick={changeBackground}
+              aria-label="Change background"
+              className="text-white/65 transition hover:text-white"
+            >
+              <ImageIcon size={20} />
+            </button>
 
             <button
-              onClick={() => {
-                setShowCelebration(false);
-                setTimeLeft(modes[mode]);
-              }}
-              className="w-full py-3 rounded-xl bg-white text-black font-semibold hover:scale-[1.03] active:scale-95 transition-all"
+              onClick={enableNotifications}
+              aria-label="Enable notifications"
+              className="text-white/65 transition hover:text-white"
             >
-              Awesome! ✨
+              <Check size={20} />
+            </button>
+
+            <button
+              onClick={enterFullscreen}
+              aria-label="Toggle fullscreen"
+              className="text-white/65 transition hover:text-white"
+            >
+              <Maximize size={20} />
             </button>
           </div>
         </div>
-      )}
+      </section>
 
-      {/* Footer */}
+
       <footer
-        className="relative z-10 w-full text-center mt-auto pt-2 pb-5 shrink-0"
+        className="relative z-10 mt-auto px-4 pb-6 pt-2 text-center text-white/65"
         style={{ fontFamily: 'Arial, sans-serif' }}
       >
-        <p className="text-xs text-white/60 tracking-widest">
-          DESIGNED & DEVELOPED BY AYUSH
+        <p className="text-[10px] tracking-[0.2em] sm:text-xs">
+          DESIGNED &amp; DEVELOPED BY AYUSH
         </p>
 
-        <p className="text-xs text-white/40 mt-1">
+        <p className="mt-2 text-[10px] text-white/45 sm:text-xs">
           Made with love and crafted with perfection
         </p>
       </footer>
 
-      {/* Animations */}
-      <style jsx>{`
-        .confetti-piece {
-          position: absolute;
-          top: -20px;
-          width: 9px;
-          height: 15px;
-          border-radius: 2px;
-          animation: confetti-fall 3s ease-in forwards;
-        }
 
-        @keyframes confetti-fall {
-          0% {
-            transform: translateY(-10px) rotate(0deg);
-            opacity: 1;
-          }
+      {showCelebration && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-md">
+          <div className="relative w-full max-w-md rounded-3xl border border-white/20 bg-zinc-950 p-8 text-center shadow-2xl sm:p-10">
 
-          100% {
-            transform: translateY(110vh) rotate(900deg);
-            opacity: 0;
-          }
-        }
+            <button
+              onClick={() => setShowCelebration(false)}
+              aria-label="Close celebration"
+              className="absolute right-5 top-5 text-white/50 hover:text-white"
+            >
+              <X size={20} />
+            </button>
 
-        @keyframes pop {
-          0% {
-            opacity: 0;
-            transform: scale(0.75) translateY(20px);
-          }
+            <div className="mb-5 text-5xl">Achieve it</div>
 
-          100% {
-            opacity: 1;
-            transform: scale(1) translateY(0);
-          }
-        }
+            <h2 className="title text-4xl">
+              {mode === 'Focus' ? 'SESSION COMPLETE!' : 'BREAK COMPLETE!'}
+            </h2>
 
-        .animate-pop {
-          animation: pop 0.4s ease-out;
-        }
-      `}</style>
+            <p
+              className="mt-4 text-sm leading-relaxed text-white/65"
+              style={{ fontFamily: 'Arial, sans-serif' }}
+            >
+              {mode === 'Focus'
+                ? 'Great work! You completed your focus session. Take a moment to recharge.'
+                : 'Your break is over. You are ready for another productive session.'}
+            </p>
 
+            <button
+              onClick={resetTimer}
+              className="mt-8 rounded-full bg-white px-8 py-3 text-sm font-semibold text-black transition hover:scale-105"
+              style={{ fontFamily: 'Arial, sans-serif' }}
+            >
+              AWESOME!
+            </button>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
